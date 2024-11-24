@@ -64,7 +64,7 @@ byte portConfigInputs[TOTAL_PORTS]; // each bit: 1 = pin in INPUT, 0 = anything 
 /* timer variables */
 unsigned long currentMillis;        // store the current value from millis()
 unsigned long previousMillis;       // for comparison with currentMillis
-unsigned int samplingInterval = 20; // how often to run the main loop (in ms)
+unsigned int samplingInterval = 100; // how often to run the main loop (in ms)
 
 /* i2c data */
 struct i2c_device_info {
@@ -220,21 +220,14 @@ void readAndReportData(byte address, int theRegister, byte numBytes, byte stopTX
   Firmata.sendSysex(SYSEX_I2C_REPLY, numBytes + 2, i2cRxData);
 }
 
-void outputPort(byte portNumber, byte portValue, int force)
+void outputPort(byte portNumber, byte portValue, byte forceSend)
 {
-  // Iterate through each pin in the port
-  for (int pin = 0; pin < 8; pin++) {
-    int pinNumber = portNumber * 8 + pin;
-    
-    // Check if the pin is configured as an input
-    if (IS_PIN_DIGITAL(pinNumber) && (portConfigInputs[portNumber] & (1 << pin))) {
-      bool currentState = digitalRead(PIN_TO_DIGITAL(pinNumber));
-      
-      // Only send if the state has changed
-      if (currentState != ((portValue >> pin) & 1)) {
-        Firmata.setPinState(pinNumber, ((portValue >> pin) & 1));
-      }
-    }
+  // pins not configured as INPUT are cleared to zeros
+  portValue = portValue & portConfigInputs[portNumber];
+  // only send if the value is different than previously sent
+  if (forceSend || previousPINs[portNumber] != portValue) {
+    Firmata.sendDigitalPort(portNumber, portValue);
+    previousPINs[portNumber] = portValue;
   }
 }
 
@@ -339,7 +332,7 @@ void setPinModeCallback(byte pin, int mode)
       break;
     case INPUT:
       if (IS_PIN_DIGITAL(pin)) {
-        pinMode(PIN_TO_DIGITAL(pin), INPUT);    // disable output driver
+        pinMode(PIN_TO_DIGITAL(pin), INPUT_PULLDOWN);    // disable output driver
 #if ARDUINO <= 100
         // deprecated since Arduino 1.0.1 - TODO: drop support in Firmata 2.6
         digitalWrite(PIN_TO_DIGITAL(pin), LOW); // disable internal pull-ups
@@ -483,11 +476,12 @@ void reportAnalogCallback(byte analogPin, int value)
       analogInputsToReport = analogInputsToReport | (1 << analogPin);
       // prevent during system reset or all analog pin values will be reported
       // which may report noise for unconnected analog pins
+      Firmata.sendAnalog(analogPin, analogRead(analogPin));
       if (!isResetting) {
         // Send pin value immediately. This is helpful when connected via
         // ethernet, wi-fi or bluetooth so pin states can be known upon
         // reconnecting.
-        Firmata.sendAnalog(analogPin, analogRead(analogPin));
+        
       }
     }
   }
